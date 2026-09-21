@@ -1,0 +1,73 @@
+# Собирает сайт из заметок этой папки с помощью Quartz и публикует на GitHub Pages.
+# Запускается сам после каждого push в ветку main. Вручную — вкладка Actions → Run workflow.
+name: Публикация сайта
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Заметки
+        uses: actions/checkout@v4
+        with:
+          path: notes
+
+      - name: Quartz
+        uses: actions/checkout@v4
+        with:
+          repository: jackyzha0/quartz
+          ref: v4.5.2
+          path: quartz
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Настройки сайта и заметки
+        run: |
+          cp notes/.quartz/quartz.config.ts notes/.quartz/quartz.layout.ts quartz/
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO="${{ github.event.repository.name }}"
+          sed -i "s|__BASE_URL__|${OWNER}.github.io/${REPO}|" quartz/quartz.config.ts
+          rm -rf quartz/content && mkdir -p quartz/content
+          find notes -maxdepth 1 -type f -name '*.md' ! -name 'Грантовские занятия.md' -exec cp {} quartz/content/ \;
+          {
+            printf -- '---\ntitle: Грантовские занятия\naliases:\n  - Грантовские занятия\n---\n\n'
+            cat "notes/Грантовские занятия.md"
+          } > quartz/content/index.md
+          ls quartz/content | wc -l
+
+      - name: Сборка
+        working-directory: quartz
+        run: |
+          npm ci
+          npx quartz build
+          printf 'User-agent: *\nDisallow: /\n' > public/robots.txt
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: quartz/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Публикация
+        id: deployment
+        uses: actions/deploy-pages@v4
